@@ -7,16 +7,15 @@ import session from 'express-session';
 
 import userRoutes from './src/route/userRoutes.js'
 import productRoutes from './src/route/productRoutes.js'
-import orderRoutes from './src/route/orderRoutes.js'
+import shoppingCartRoutes from './src/route/shoppingCartRoutes.js'
 
 const app = express();
 app.use(session({
-  secret: process.env.JWT_SECRET,
-  resave: false,
-  saveUninitialized: true,
-  cookie: { 
-    secure: false, // Set to true if using HTTPS
-    sameSite: 'none' // Allow cross-origin cookies
+  secret: process.env.SESSION_SECRET,
+  saveUninitialized: false, 
+  resave: false, 
+  cookie: {
+      maxAge: 1000 * 60 * 60 * 24, // Thời hạn cookie (ở đây là 1 ngày)
   }
 }));
 app.use(cors({
@@ -38,7 +37,7 @@ app.get('/', (req, res) => {
 
 app.use('/api/users', userRoutes);
 app.use('/api/products', productRoutes);
-app.use('/api/order', orderRoutes);
+app.use('/api/order', shoppingCartRoutes);
 
 app.listen(3001, () => {
   console.log('Server is running http://localhost:3001');

@@ -1,18 +1,18 @@
 import { addUser, findUserByUsername, getUserByUserID, updateUserPassword } from "../models/userModel.js";
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-import { getShoppingCartById } from "../models/orderModel.js";
+import { getShoppingCartById } from "../models/shoppingCartModel.js";
+import sendResponse from "../utils/responseHelper.js";
 
 export const registerUser = async (req, res) => {
     const { fullname, gender, username, password, email, phone, birthday } = req.body;
 
     try {
-
         const usernameDB = await findUserByUsername(username);
         console.log(usernameDB)
 
         if (usernameDB.length > 0) {
-            return res.status(409).json({ message: 'Username already exists', user: usernameDB });
+            return sendResponse(res, 'error', "User already registered", null, { code: 400 })
         }
 
         const data = {
@@ -25,114 +25,114 @@ export const registerUser = async (req, res) => {
             birthday: birthday
         }
 
-        const newdata = await addUser(data)
-        console.log(newdata)
-        res.status(201).json({
-            message: 'User registered successfully',
-            user: newdata.user,
-            shoppingCart: newdata.shopping_cart
+        const newData = await addUser(data)
+
+        const user = newData.user.length > 0 ? newData.user[0] : null;
+        const shoppingCart = newData.shopping_cart.length > 0 ? newData.shopping_cart[0] : null;
+
+        sendResponse(res, 'success', 'User registered successfully', {
+            user,
+            shoppingCart
         });
 
     } catch (error) {
-        res.status(500).json({
-            message: 'Error registering user',
-            error: error.message
-        });
+        sendResponse(res, 'error', 'Registration failed', null, { code: 500, details: error.message });
     }
 }
 
+// login user
 export const loginUser = async (req, res) => {
     const { username, password, rememberMe } = req.body;
 
-    const userID = req.cookies.userID;
-    console.log("User ID: " + userID)
-
     try {
-        // Check if user is already logged in
-        if (userID) {
-            const getUser = await getUserByUserID(userID)
-
-            if (getUser.length > 0) {
-                const checkUsername = getUser[0].username
-                if (checkUsername === username) {
-                    const token = jwt.sign({ id: userID }, process.env.JWT_SECRET, { expiresIn: '1h' });
-                    const shoppingCartData = await getShoppingCartById(userID)
-                    console.log("Shopping Cart Data: " + shoppingCartData)
-                    const shoppingCartID = shoppingCartData[0].id
-                    res.cookie('shoppingCartID', shoppingCartID, {
-                        maxAge: 3600000 * 24, // 24 hours expiration
-                        // httpOnly: true // Only accessible via HTTP(S
-                    })
-                    console.log('User is already logged in')
-                    return res.json({ message: 'User is already logged in', token, userID });
-                }
-            }
-
-
-        }
-
-        // Validate username and password for new login attempt
+        // Validate username and password for login attempt
         if (!username || !password) {
-            return res.status(400).json({ message: "Username and password are required" });
+            return sendResponse(res, 'error', 'Username and password are required', null, { code: 400 });
         }
 
-
+        // Find user by username
         const findUser = await findUserByUsername(username);
-
-        if (findUser.length === 0) {
-            return res.status(404).json({ message: 'User not found' });
-        }
         const user = findUser[0];
 
-        if (user.length === 0) {
-            return res.status(404).json({ message: 'User not found' });
+        // Check if user exists
+        if (!user) {
+            return sendResponse(res, 'error', 'User not found', null, { code: 404 });
         }
 
-        if (typeof user.password !== 'string') {
-            console.error('Invalid password format in database:', user.password);
-            throw new Error('Invalid password format in database');
+        // Check if password and hashed password are valid strings
+        if (typeof user.password !== 'string' || typeof password !== 'string') {
+            console.error('Invalid password format');
+            throw new Error('Invalid password format');
         }
 
-        // Ensure the plain password is a string
-        if (typeof password !== 'string') {
-            console.error('Invalid password format from request:', password);
-            throw new Error('Invalid password format from request');
-        }
-
-        // Compare the plaintext password with the hashed password
+        // Compare plaintext password with hashed password
         const isPasswordValid = await bcrypt.compare(password, user.password);
-
         if (!isPasswordValid) {
-            return res.status(401).json({ message: 'Invalid credentials' });
+            return sendResponse(res, 'error', 'Invalid credentials', null, { code: 401 });
         }
 
-        // Generate a JWT token
-        const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+        // Generate Access Token
+        const accessToken = jwt.sign(
+            { userID: user.id },
+            process.env.ACCESS_TOKEN_SECRET,
+            { expiresIn: '15m' }
+        );
 
-        // Set cookie if rememberMe is checked
-        if (rememberMe) {
-            console.log('Setting cookie for user: ', user.id);
-            res.cookie('userID', user.id, {
-                maxAge: 3600000 * 24, // 24 hours expiration
-                // httpOnly: true // Only accessible via HTTP(S)
+        // Generate Refresh Token (if "Remember Me" is selected)
+        const refreshToken = jwt.sign(
+            { userID: user.id },
+            process.env.REFRESH_TOKEN_SECRET,
+            { expiresIn: '7d' } // Refresh token lasts for 7 days
+        );
 
-            });
-        }
+        // Store Refresh Token in HTTP-only cookie
+        res.cookie('refreshToken', refreshToken, {
+            httpOnly: true,
+            secure: true, // Secure cookie to ensure it is only sent over HTTPS
+            sameSite: 'Strict', // Protect against CSRF attacks
+            maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days in milliseconds
+        });
 
-        const shoppingCartData = await getShoppingCartById(user.id)
-        const shoppingCartID = shoppingCartData[0].id
-        console.log("shoppingCartID: ", shoppingCartID)
-        res.cookie('shoppingCartID', shoppingCartID, {
-            maxAge: 3600000 * 24, // 24 hours expiration
-            // httpOnly: true // Only accessible via HTTP(S)
+        // Fetch shopping cart data based on user ID (optional)
+        const shoppingCartData = await getShoppingCartById(user.id);
+        const shoppingCartID = shoppingCartData[0]?.id;
 
-        })
-
-        res.json({ message: 'Login successful', token });
+        // Send response with Access Token (and Refresh Token if needed)
+        return sendResponse(res, 'success', 'Login successful', {
+            accessToken,
+            shoppingCartID
+        });
 
     } catch (error) {
         console.error('Error logging in:', error.message);
-        res.status(500).json({ message: 'Error logging in', error: error.message });
+        return sendResponse(res, 'error', error.message, null, { code: 500 });
+    }
+};
+
+
+export const refreshToken = async (req, res) => {
+    const { refreshToken } = req.cookies; // Hoặc từ req.body nếu sử dụng POST
+
+    if (!refreshToken) {
+        return sendResponse(res, 'error', 'No refresh token provided', null, { code: 401 });
+    }
+
+    try {
+        const decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
+        const user = await getUserByUserID(decoded.userID);
+        const userID = user[0].id
+
+        if (!user) {
+            return sendResponse(res, 'error', 'Invalid refresh token', null, { code: 403 });
+        }
+
+        const newAccessToken = jwt.sign({ userID: userID }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '15m' });
+
+        return sendResponse(res, 'success', 'Token refreshed', { accessToken: newAccessToken });
+
+    } catch (error) {
+        console.error('Error refreshing token:', error.message);
+        return sendResponse(res, 'error', 'Error refreshing token', null, { code: 500 });
     }
 };
 
